@@ -14,5 +14,5 @@ def parse_test_case(text: str) -> List[str]:
     Empty items and surrounding whitespace are stripped from the result.
     """
 
-    parts = re.split(r"\s*\d+\.\s*", text.strip())
+    parts = re.split(r"\s*\d+[\.)]?\s*", text.strip())
     return [part.strip() for part in parts if part.strip()]

@@ -34,12 +34,14 @@ class InstructionAgent:
             current_html = await executor.html()
             for index, step in enumerate(steps, 1):
                 logger.info("Processing step %s: %s", index, step)
+                phase = "VERIFY" if index % 2 == 1 else "ACT"
                 state = await self._run_single_step(
                     executor=executor,
                     step=step,
                     step_index=index,
                     html=current_html,
                     history=history,
+                    phase=phase,
                 )
                 instruction = state["instruction"]
                 current_html = state["html"]
@@ -50,6 +52,7 @@ class InstructionAgent:
                         "instruction": instruction,
                         "retries": state.get("retries", 0),
                         "source": state.get("instruction_source", "unknown"),
+                        "phase": phase,
                     }
                 )
         return history
@@ -62,6 +65,7 @@ class InstructionAgent:
         step_index: int,
         html: str,
         history: List[JSONDict],
+        phase: str,
     ) -> JSONDict:
         StepState = Dict[str, Any]
 
@@ -79,6 +83,7 @@ class InstructionAgent:
                 html=state.get("html", html),
                 history=history,
                 feedback=feedback_message or None,
+                phase=phase,
                 use_tools=not state.get("force_llm", False),
             )
             logger.debug(
@@ -98,6 +103,7 @@ class InstructionAgent:
                 "retries": state.get("retries", 0),
                 "user_feedback": None,
                 "force_llm": False,
+                "phase": state.get("phase", phase),
             }
 
         def replace_selector(instruction: JSONDict, original: str, new: str) -> JSONDict:
@@ -125,6 +131,7 @@ class InstructionAgent:
             while True:
                 print("\n=== Step", step_index, "===")
                 print(step)
+                print(f"Expected phase: {phase}")
                 print(f"Instruction source: {source}")
                 if metadata:
                     print(f"Tool metadata: {json.dumps(metadata, ensure_ascii=False)}")
@@ -169,6 +176,7 @@ class InstructionAgent:
                 "user_feedback": user_feedback,
                 "retries": retries,
                 "force_llm": force_llm,
+                "phase": state.get("phase", phase),
             }
 
         def user_review_router(state: StepState) -> str:
@@ -184,6 +192,7 @@ class InstructionAgent:
                     "validation_decision": "regenerate",
                     "error": message,
                     "retries": state.get("retries", 0) + 1,
+                    "phase": state.get("phase", phase),
                 }
             errors: List[str] = []
             for position, action in enumerate(actions, 1):
@@ -204,8 +213,48 @@ class InstructionAgent:
                     "validation_decision": "regenerate",
                     "error": message,
                     "retries": state.get("retries", 0) + 1,
+                    "phase": state.get("phase", phase),
                 }
-            return {"validation_decision": "execute", "error": None}
+
+            phase_name = state.get("phase", phase)
+            action_types = [action.get("type") for action in actions if isinstance(action, dict)]
+            if phase_name == "VERIFY":
+                allowed = {"expect", "assert_text"}
+                if not action_types:
+                    message = "VERIFY steps must contain at least one assertion action"
+                    print(f"Validation error: {message}\n")
+                    return {
+                        "validation_decision": "regenerate",
+                        "error": message,
+                        "retries": state.get("retries", 0) + 1,
+                        "phase": phase_name,
+                    }
+                invalid = [action for action in action_types if action not in allowed]
+                if invalid:
+                    message = "VERIFY steps cannot include interaction actions"
+                    print(f"Validation error: {message}\n")
+                    return {
+                        "validation_decision": "regenerate",
+                        "error": message,
+                        "retries": state.get("retries", 0) + 1,
+                        "phase": phase_name,
+                    }
+            else:
+                interactive = {"goto", "click", "fill"}
+                if not any(action in interactive for action in action_types):
+                    message = "ACT steps must include at least one interaction action"
+                    print(f"Validation error: {message}\n")
+                    return {
+                        "validation_decision": "regenerate",
+                        "error": message,
+                        "retries": state.get("retries", 0) + 1,
+                        "phase": phase_name,
+                    }
+            return {
+                "validation_decision": "execute",
+                "error": None,
+                "phase": state.get("phase", phase),
+            }
 
         def validation_router(state: StepState) -> str:
             return "generate" if state.get("validation_decision") == "regenerate" else "execute"
@@ -225,6 +274,7 @@ class InstructionAgent:
                     "retries": state.get("retries", 0) + 1,
                     "instruction": instruction,
                     "html": snapshot_html,
+                    "phase": state.get("phase", phase),
                 }
             except Exception as exc:  # pragma: no cover - runtime execution failure
                 message = f"Execution error: {exc}"
@@ -236,6 +286,7 @@ class InstructionAgent:
                     "retries": state.get("retries", 0) + 1,
                     "instruction": instruction,
                     "html": snapshot_html,
+                    "phase": state.get("phase", phase),
                 }
             current_html = await executor.html()
             return {
@@ -243,6 +294,7 @@ class InstructionAgent:
                 "html": current_html,
                 "error": None,
                 "instruction": instruction,
+                "phase": state.get("phase", phase),
             }
 
         def execution_router(state: StepState) -> str:
@@ -274,6 +326,7 @@ class InstructionAgent:
             "instruction": {},
             "retries": 0,
             "force_llm": False,
+            "phase": phase,
         }
 
         final_state = await app.ainvoke(initial_state)

@@ -29,7 +29,7 @@ class StepTool(Protocol):
 
     name: str
 
-    def matches(self, step: str) -> bool:
+    def matches(self, step: str, phase: str) -> bool:
         """Return ``True`` if the tool can handle the provided step."""
 
     async def arun(
@@ -39,6 +39,7 @@ class StepTool(Protocol):
         html: str,
         history: Sequence[JSONDict],
         feedback: Optional[str],
+        phase: str,
     ) -> Optional[ToolResult]:
         """Produce an instruction or ``None`` if the tool cannot help."""
 
@@ -48,9 +49,9 @@ class FormFillTool:
 
     name = "form_fill"
 
-    def matches(self, step: str) -> bool:  # pragma: no cover - simple predicate
+    def matches(self, step: str, phase: str) -> bool:  # pragma: no cover - simple predicate
         lowered = step.lower()
-        return "заполн" in lowered or "fill" in lowered
+        return phase == "ACT" and ("заполн" in lowered or "fill" in lowered)
 
     async def arun(
         self,
@@ -59,6 +60,7 @@ class FormFillTool:
         html: str,
         history: Sequence[JSONDict],
         feedback: Optional[str],
+        phase: str,
     ) -> Optional[ToolResult]:
         fields = self._extract_fields(step)
         if not fields:
@@ -138,11 +140,18 @@ class ToolRegistry:
         html: str,
         history: Sequence[JSONDict],
         feedback: Optional[str],
+        phase: str,
     ) -> Optional[ToolResult]:
         for tool in self._tools:
-            if not tool.matches(step):
+            if not tool.matches(step, phase):
                 continue
-            result = await tool.arun(step=step, html=html, history=history, feedback=feedback)
+            result = await tool.arun(
+                step=step,
+                html=html,
+                history=history,
+                feedback=feedback,
+                phase=phase,
+            )
             if result:
                 return result
         return None

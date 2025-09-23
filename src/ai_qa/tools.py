@@ -28,6 +28,7 @@ class StepTool(Protocol):
     """Protocol describing a step-aware instruction helper."""
 
     name: str
+    description: str
 
     def matches(self, step: str, phase: str) -> bool:
         """Return ``True`` if the tool can handle the provided step."""
@@ -48,6 +49,9 @@ class FormFillTool:
     """A heuristic tool that fills textual inputs based on labels and names."""
 
     name = "form_fill"
+    description = (
+        "Автоматически заполняет текстовые поля на основе названий, подписей и истории"
+    )
 
     def matches(self, step: str, phase: str) -> bool:  # pragma: no cover - simple predicate
         lowered = step.lower()
@@ -125,16 +129,30 @@ class FormFillTool:
 
 
 class ToolRegistry:
-    """Registry dispatching steps to matching tools."""
+    """Registry for named tools available to the agent."""
 
     def __init__(self, tools: Optional[Iterable[StepTool]] = None) -> None:
-        self._tools: List[StepTool] = list(tools or [])
+        self._tools: Dict[str, StepTool] = {}
+        for tool in tools or []:
+            self.register(tool)
 
     def register(self, tool: StepTool) -> None:
-        self._tools.append(tool)
+        self._tools[tool.name] = tool
 
-    async def arun(
+    def get(self, name: str) -> Optional[StepTool]:
+        return self._tools.get(name)
+
+    def specs(self) -> List[Dict[str, str]]:
+        """Return tool metadata for prompting the LLM selector."""
+
+        return [
+            {"name": tool.name, "description": tool.description}
+            for tool in self._tools.values()
+        ]
+
+    async def call(
         self,
+        name: str,
         *,
         step: str,
         html: str,
@@ -142,16 +160,13 @@ class ToolRegistry:
         feedback: Optional[str],
         phase: str,
     ) -> Optional[ToolResult]:
-        for tool in self._tools:
-            if not tool.matches(step, phase):
-                continue
-            result = await tool.arun(
-                step=step,
-                html=html,
-                history=history,
-                feedback=feedback,
-                phase=phase,
-            )
-            if result:
-                return result
-        return None
+        tool = self.get(name)
+        if not tool:
+            return None
+        return await tool.arun(
+            step=step,
+            html=html,
+            history=history,
+            feedback=feedback,
+            phase=phase,
+        )
